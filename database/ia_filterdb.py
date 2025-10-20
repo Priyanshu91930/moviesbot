@@ -4,30 +4,68 @@ import re
 import base64
 from hydrogram.file_id import FileId
 from pymongo import MongoClient, TEXT
-from pymongo.errors import DuplicateKeyError, OperationFailure
+from pymongo.errors import DuplicateKeyError, OperationFailure, ConnectionFailure
 from info import USE_CAPTION_FILTER, FILES_DATABASE_URL, SECOND_FILES_DATABASE_URL, DATABASE_NAME, COLLECTION_NAME, MAX_BTN
 
 logger = logging.getLogger(__name__)
 
-client = MongoClient(FILES_DATABASE_URL)
-db = client[DATABASE_NAME]
-collection = db[COLLECTION_NAME]
-try:
-    collection.create_index([("file_name", TEXT)])
-except OperationFailure as e:
-    if 'quota' in str(e).lower():
-        if not SECOND_FILES_DATABASE_URL:
-            logger.error(f'your FILES_DATABASE_URL is already full, add SECOND_FILES_DATABASE_URL')
-        else:
-            logger.info('FILES_DATABASE_URL is full, now using SECOND_FILES_DATABASE_URL')
-    else:
-        logger.exception(e)
+def create_mongo_client(database_url):
+    """Create a MongoDB client with robust error handling"""
+    try:
+        # Parse the connection string to extract potential authentication details
+        from urllib.parse import urlparse, parse_qs
+        parsed_url = urlparse(database_url)
+        
+        # Log connection details (without sensitive information)
+        logger.info(f"Connecting to MongoDB at {parsed_url.hostname}")
+        
+        # Create client with additional connection options
+        client = MongoClient(
+            database_url, 
+            serverSelectionTimeoutMS=10000,  # 10 second timeout
+            socketTimeoutMS=10000,           # 10 second socket timeout
+            connectTimeoutMS=10000           # 10 second connection timeout
+        )
+        
+        # Test the connection
+        client.admin.command('ismaster')
+        logger.info("Successfully connected to MongoDB")
+        return client
+    except (ConnectionFailure, OperationFailure) as e:
+        logger.error(f"Failed to connect to MongoDB: {e}")
+        # Provide more detailed error logging
+        if isinstance(e, OperationFailure):
+            logger.error(f"Authentication error details: {e.details}")
+        raise
 
+try:
+    client = create_mongo_client(FILES_DATABASE_URL)
+    db = client[DATABASE_NAME]
+    collection = db[COLLECTION_NAME]
+    try:
+        collection.create_index([("file_name", TEXT)])
+    except OperationFailure as e:
+        logger.error(f"Failed to create index: {e}")
+        if 'quota' in str(e).lower():
+            logger.warning('Database quota reached. Consider using SECOND_FILES_DATABASE_URL')
+except Exception as e:
+    logger.error(f"Critical error setting up primary database: {e}")
+    raise
+
+# Secondary database setup with similar robust error handling
 if SECOND_FILES_DATABASE_URL:
-    second_client = MongoClient(SECOND_FILES_DATABASE_URL)
-    second_db = second_client[DATABASE_NAME]
-    second_collection = second_db[COLLECTION_NAME]
-    second_collection.create_index([("file_name", TEXT)])
+    try:
+        second_client = create_mongo_client(SECOND_FILES_DATABASE_URL)
+        second_db = second_client[DATABASE_NAME]
+        second_collection = second_db[COLLECTION_NAME]
+        try:
+            second_collection.create_index([("file_name", TEXT)])
+        except OperationFailure as e:
+            logger.error(f"Failed to create index for secondary database: {e}")
+    except Exception as e:
+        logger.error(f"Critical error setting up secondary database: {e}")
+        second_client = None
+        second_collection = None
 
 
 def second_db_count_documents():
