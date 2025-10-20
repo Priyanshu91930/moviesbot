@@ -7,11 +7,10 @@ logging.basicConfig(
 logging.getLogger('hydrogram').setLevel(logging.ERROR)
 logger = logging.getLogger(__name__)
 
-import os
-import time
 import asyncio
 import uvloop
-from hydrogram import types
+import os
+import time
 from hydrogram import Client
 from hydrogram.errors import FloodWait
 from aiohttp import web
@@ -23,7 +22,7 @@ from database.users_chats_db import db
 from pymongo.mongo_client import MongoClient
 from pymongo.server_api import ServerApi
 
-# Ensure event loop is set up before running
+# Explicitly set up event loop policy
 uvloop.install()
 asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
 
@@ -110,13 +109,25 @@ class Bot(Client):
                 current += 1
 
 def main():
+    # Create a new event loop explicitly
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
     try:
+        # Create the bot instance
         app = Bot()
-        asyncio.run(app.start())
-        app.run()
+        
+        # Run the bot's start method
+        loop.run_until_complete(app.start())
+        
+        # Run the bot
+        loop.run_forever()
     except Exception as e:
         logger.error(f"An error occurred during bot initialization: {e}")
         raise
+    finally:
+        # Ensure the loop is closed
+        loop.close()
 
 if __name__ == '__main__':
     main()
